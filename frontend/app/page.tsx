@@ -245,11 +245,17 @@ export default function Home () {
         ].join(',')}
         onChange={handleFileUpload}
         className="cursor-pointer"
+        disabled={isUploading}
       />
       <p className="mt-2 text-sm text-slate-600">
         Supported formats: MP4, WebM, OGG, MKV, MOV, AVI, WMV
       </p>
-      {isUploading && <p className="mt-2 text-slate-600">Uploading...</p>}
+      {isUploading && (
+        <div className="mt-4 flex items-center gap-2 text-slate-600">
+          <div className="w-4 h-4 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
+          <p>Processing video... This may take a few moments.</p>
+        </div>
+      )}
     </Card>
   );
 
