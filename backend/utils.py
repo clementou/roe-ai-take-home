@@ -8,7 +8,6 @@ model = whisper.load_model("base")
 sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def process_video(video_path: str) -> List[Dict]:
-    # Check duration
     probe = ffmpeg.probe(video_path)
     duration = float(probe['format']['duration'])
     if duration > 180:  # 3 minutes

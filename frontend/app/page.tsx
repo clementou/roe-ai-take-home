@@ -1,7 +1,11 @@
 'use client';
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import axios from 'axios';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 interface SearchResult {
   start: number;
@@ -17,6 +21,16 @@ interface ApiError {
   };
 }
 
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface StreamingContent {
+  thinking: string;
+  response: string;
+}
+
 export default function Home () {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -27,6 +41,21 @@ export default function Home () {
   const [wsMessages, setWsMessages] = useState<string[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [currentStreamedMessage, setCurrentStreamedMessage] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [streamingContent, setStreamingContent] = useState<StreamingContent>({
+    thinking: '',
+    response: ''
+  });
+
+  const videoUrl = useMemo(() =>
+    videoFile ? URL.createObjectURL(videoFile) : null,
+    [videoFile]
+  );
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -68,16 +97,48 @@ export default function Home () {
   const initWebSocket = (id: string) => {
     wsRef.current = new WebSocket(`ws://localhost:8000/chat/${id}`);
 
+    wsRef.current.onopen = () => {
+      setIsConnected(true);
+    };
+
     wsRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      setWsMessages(prev => [...prev, data.response]);
+      if (data.error) {
+        setError(data.error);
+      } else if (data.done) {
+        // When message is complete, add it to chat history
+        setChatHistory(prev => [...prev, {
+          role: 'assistant',
+          content: streamingContent.response || data.full_response
+        }]);
+        setStreamingContent({ thinking: '', response: '' });
+      } else {
+        // Update streaming content
+        setStreamingContent(prev => ({
+          thinking: prev.thinking + (data.thinking || ''),
+          response: prev.response + (data.response || '')
+        }));
+      }
+      scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    wsRef.current.onclose = () => {
+      setIsConnected(false);
     };
   };
 
   const sendChatMessage = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(searchQuery);
-    }
+    if (!chatMessage.trim() || !wsRef.current || !isConnected) return;
+
+    // Add user message to chat history
+    setChatHistory(prev => [...prev, {
+      role: 'user',
+      content: chatMessage
+    }]);
+
+    // Send message through WebSocket
+    wsRef.current.send(chatMessage);
+    setChatMessage('');
   };
 
   const seekToTime = (time: number) => {
@@ -88,103 +149,164 @@ export default function Home () {
   };
 
   return (
-    <div className="min-h-screen p-8">
-      <main className="max-w-4xl mx-auto space-y-8">
+    <div className="min-h-screen p-8 bg-slate-50">
+      <main className="max-w-7xl mx-auto space-y-8">
         <h1 className="text-3xl font-bold">Video Search Engine</h1>
 
         {/* Upload Section */}
-        <section className="space-y-4">
-          <h2 className="text-xl font-semibold">Upload Video</h2>
-          <input
+        <Card className="p-6">
+          <h2 className="text-xl font-semibold mb-4">Upload Video</h2>
+          <Input
             type="file"
             accept="video/*"
             onChange={handleFileUpload}
-            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+            className="cursor-pointer"
           />
-          {isUploading && <p>Uploading...</p>}
-        </section>
+          {isUploading && <p className="mt-2 text-slate-600">Uploading...</p>}
+        </Card>
 
-        {/* Video Player */}
         {videoFile && (
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold">Video Preview</h2>
-            <video
-              ref={videoRef}
-              src={URL.createObjectURL(videoFile)}
-              controls
-              className="w-full rounded-lg"
-            >
-              Your browser does not support the video tag.
-            </video>
-          </section>
-        )}
-
-        {/* Search Section */}
-        {videoId && (
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold">Search Video Content</h2>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="What would you like to know about the video?"
-                className="flex-1 p-2 border rounded"
-              />
-              <button
-                onClick={handleSearch}
-                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-              >
-                Search
-              </button>
-              <button
-                onClick={sendChatMessage}
-                className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-              >
-                Chat
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* Results Section */}
-        {searchResults.length > 0 && (
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold">Results</h2>
-            <div className="space-y-2">
-              {searchResults.map((result, index) => (
-                <div
-                  key={index}
-                  className="p-4 border rounded cursor-pointer hover:bg-gray-50"
-                  onClick={() => seekToTime(result.start)}
-                >
-                  <p className="font-medium">Time: {result.start.toFixed(2)}s - {result.end.toFixed(2)}s</p>
-                  <p>{result.text}</p>
+          <div className="grid grid-cols-1 md:grid-cols-[1fr,400px] gap-8">
+            {/* Video Section - Fixed height */}
+            <div className="space-y-8">
+              <Card className="p-6">
+                <h2 className="text-xl font-semibold mb-4">Video Preview</h2>
+                <div className="aspect-video w-full">
+                  <video
+                    ref={videoRef}
+                    src={videoUrl || undefined}
+                    controls
+                    className="w-full h-full rounded-lg"
+                  >
+                    Your browser does not support the video tag.
+                  </video>
                 </div>
-              ))}
+              </Card>
             </div>
-          </section>
-        )}
 
-        {/* Chat Messages */}
-        {wsMessages.length > 0 && (
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold">Chat History</h2>
-            <div className="space-y-2">
-              {wsMessages.map((msg, index) => (
-                <div key={index} className="p-4 bg-gray-100 rounded">
-                  <p>{msg}</p>
+            {/* Right Column - Search and Chat */}
+            <div className="space-y-6">
+              {videoId && (
+                <div className="space-y-6">
+                  {/* Search Section with Results */}
+                  <Card className="p-6">
+                    <h2 className="text-xl font-semibold mb-4">Search Video Content</h2>
+                    <div className="space-y-4">
+                      <Input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="What would you like to know about the video?"
+                      />
+                      <Button
+                        onClick={handleSearch}
+                        className="w-full"
+                      >
+                        Search
+                      </Button>
+
+                      {/* Search Results */}
+                      {searchResults.length > 0 && (
+                        <div className="mt-4">
+                          <h3 className="text-sm font-semibold text-slate-600 mb-2">Results</h3>
+                          <ScrollArea className="h-[200px]">
+                            <div className="space-y-2">
+                              {searchResults.map((result, index) => (
+                                <div
+                                  key={index}
+                                  onClick={() => seekToTime(result.start)}
+                                  className="p-3 rounded-lg border border-slate-200 cursor-pointer hover:bg-slate-50 transition-colors"
+                                >
+                                  <p className="font-medium text-sm text-slate-600">
+                                    {result.start.toFixed(2)}s - {result.end.toFixed(2)}s
+                                  </p>
+                                  <p className="mt-1">{result.text}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+
+                  {/* Chat Interface */}
+                  <Card className="p-6">
+                    <h2 className="text-xl font-semibold mb-4">Chat</h2>
+                    <div className="space-y-4">
+                      <ScrollArea className="h-[400px] pr-4">
+                        <div className="space-y-4">
+                          {chatHistory.map((msg, idx) => (
+                            <div
+                              key={idx}
+                              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'
+                                }`}
+                            >
+                              <div
+                                className={`rounded-lg p-3 max-w-[80%] ${msg.role === 'user'
+                                    ? 'bg-blue-500 text-white'
+                                    : 'bg-slate-200 text-slate-900'
+                                  }`}
+                              >
+                                {msg.content}
+                              </div>
+                            </div>
+                          ))}
+                          {(streamingContent.thinking || streamingContent.response) && (
+                            <div className="flex justify-start">
+                              <div className="rounded-lg p-3 max-w-[80%] space-y-2">
+                                {streamingContent.thinking && (
+                                  <div className="bg-slate-100 p-2 rounded text-slate-600">
+                                    <div className="text-xs text-slate-500 mb-1 font-semibold">Thinking...</div>
+                                    <div className="font-mono text-sm border-l-2 border-slate-300 pl-2">
+                                      {streamingContent.thinking}
+                                    </div>
+                                  </div>
+                                )}
+                                {streamingContent.response && (
+                                  <div className="bg-slate-200 p-2 rounded text-slate-900">
+                                    {streamingContent.response}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div ref={scrollRef} />
+                        </div>
+                      </ScrollArea>
+                      <div className="flex gap-2">
+                        <Input
+                          type="text"
+                          value={chatMessage}
+                          onChange={(e) => setChatMessage(e.target.value)}
+                          placeholder="Ask about the video..."
+                          onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()}
+                          disabled={!isConnected}
+                        />
+                        <Button
+                          onClick={sendChatMessage}
+                          disabled={!isConnected}
+                        >
+                          Send
+                        </Button>
+                      </div>
+                      {!isConnected && (
+                        <p className="text-red-500 text-sm">
+                          Disconnected from chat. Please refresh the page.
+                        </p>
+                      )}
+                    </div>
+                  </Card>
                 </div>
-              ))}
+              )}
             </div>
-          </section>
-        )}
-
-        {/* Error Display */}
-        {error && (
-          <div className="p-4 bg-red-100 text-red-700 rounded">
-            {error}
           </div>
+        )}
+
+        {error && (
+          <Card className="p-4 bg-red-50 border-red-200">
+            <p className="text-red-700">{error}</p>
+          </Card>
         )}
       </main>
     </div>
