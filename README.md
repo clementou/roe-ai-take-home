@@ -12,17 +12,14 @@ ffmpeg
 brew install ffmpeg
 ```
 
-uv (Poetry should work too)
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
 ## Run
 
 ```bash
 cd backend
-uv run uvicorn main:app --reload
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload
 ```
 
 In another terminal, run the frontend:
