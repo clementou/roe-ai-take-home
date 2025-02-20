@@ -14,6 +14,15 @@ brew install ffmpeg
 
 ## Run
 
+Make sure to create a `.env` file in the backend directory with the following:
+
+```bash
+OPENAI_API_KEY=your_openai_api_key
+USE_MLX=true
+```
+
+If you want to use an API for the LLM, set `USE_MLX=false` and add an `OPENAI_API_KEY` variable. You may also need to remove the `mlx-lm` dependency from the `requirements.txt` file.
+
 ```bash
 cd backend
 python -m venv .venv
@@ -46,9 +55,12 @@ When the user uploads a video, the backend processes the video by:
 
 When the user searches in the video, the backend calculates the cosine similarity between the query and the embeddings of the transcripts. It then returns the top 3 most similar segments.
 
-When the user asks a question about the video, the backend uses an LLM (Deepseek-R1-Distill-Qwen-1.5B) to generate a response. The LLM is given the full transcript (including the objects detected in the frames) and the user's question as context. I run the LLM locally using MLX.
+When the user asks a question about the video, the backend uses an LLM to generate a response. There are two options:
 
-I considered using third-party APIs for the visual understanding, similarity search, and the LLM, but considering the size of the data (3-min videos), and the example question, I thought the extra performance was not necessary for a demo, where easy setup might be preferred.
+1. Local inference using Deepseek-R1-Distill-Qwen-1.5B (Apple Silicon Macs only) - This runs offline using MLX
+2. API-based inference using OpenAI's API (all platforms) - Requires an OpenAI API key
+
+I considered using third-party APIs for the visual understanding, similarity search, but considering the size of the data (3-min videos), and the example question, I thought the extra performance was not necessary for a demo, where easy setup might be preferred.
 
 I also considered using a Video Language Model, but that would be too large to run locally, and might not be necessary for the example use case of speech-heavy videos.
 

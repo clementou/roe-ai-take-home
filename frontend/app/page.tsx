@@ -69,7 +69,7 @@ export default function Home () {
 
   const VideoPreviewSection = useMemo(() => {
     if (!videoFile) return null;
-    
+
     return (
       <Card className="p-6">
         <h2 className="text-xl font-semibold mb-4">Video Preview</h2>
@@ -87,7 +87,7 @@ export default function Home () {
     );
   }, [videoFile, videoUrl]);
 
-  const handleChatInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChatInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setChatMessage(e.target.value);
   }, []);
 
@@ -394,13 +394,19 @@ export default function Home () {
                       </div>
                     </ScrollArea>
                     <div className="flex gap-2">
-                      <Input
-                        type="text"
+                      <textarea
                         value={chatMessage}
                         onChange={handleChatInputChange}
                         placeholder="Ask about the video..."
-                        onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            sendChatMessage();
+                          }
+                        }}
                         disabled={!isConnected}
+                        className="flex-1 min-h-[40px] max-h-[120px] px-3 py-2 rounded-md border border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+                        rows={1}
                       />
                       <Button
                         onClick={sendChatMessage}

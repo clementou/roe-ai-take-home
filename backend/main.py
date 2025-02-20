@@ -1,16 +1,34 @@
 import os
 import uuid
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mlx_lm import load, stream_generate
+from openai import OpenAI
+from functools import lru_cache
+from pydantic_settings import BaseSettings
 from utils import process_video, search_transcript
+from mlx_lm.sample_utils import make_sampler
+
+
+class Settings(BaseSettings):
+    openai_api_key: str | None = None
+    use_mlx: bool = True
+
+    class Config:
+        env_file = ".env"
+
+
+@lru_cache()
+def get_settings():
+    return Settings()
+
 
 app = FastAPI()
 
 print("Loading MLX model...")
-model, tokenizer = load("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+mlx_model, mlx_tokenizer = load("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") if get_settings().use_mlx else (None, None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +83,7 @@ async def search_video(video_id: str, query: str):
 
 
 @app.websocket("/chat/{video_id}")
-async def websocket_endpoint(websocket: WebSocket, video_id: str):
+async def websocket_endpoint(websocket: WebSocket, video_id: str, settings: Settings = Depends(get_settings)):
     """
     Handle WebSocket connections for real-time chat.
 
@@ -87,8 +105,7 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str):
 
             # Combine transcript segments with timestamps for context
             transcript = "\n".join(
-                [f"[{seg['start']:.2f}s - {seg['end']:.2f}s]: {seg['enhanced_text']}" 
-                 for seg in VIDEO_DATA[video_id]]
+                [f"[{seg['start']:.2f}s - {seg['end']:.2f}s]: {seg['enhanced_text']}" for seg in VIDEO_DATA[video_id]]
             )
 
             prompt = f"""You are a helpful AI assistant that answers questions about video content. 
@@ -104,48 +121,77 @@ Question: {message}
 
 Please provide a helpful response based on both the spoken and visual content."""
 
-            # Apply chat template if available
-            if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template is not None:
-                messages = [{"role": "user", "content": prompt}]
-                prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            if settings.use_mlx:
+                # MLX model path
+                if hasattr(mlx_tokenizer, "apply_chat_template") and mlx_tokenizer.chat_template is not None:
+                    messages = [{"role": "user", "content": prompt}]
+                    prompt = mlx_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-            # Stream response with separate thinking/response phases
-            full_response = ""
-            buffer = ""
-            final_response_started = False
+                sampler = make_sampler(temp=0.6)
+                
+                full_response = ""
+                buffer = ""
+                final_response_started = False
 
-            for response in stream_generate(model, tokenizer, prompt, max_tokens=1024):
-                chunk = response.text
-                full_response += chunk
+                for response in stream_generate(mlx_model, mlx_tokenizer, prompt, max_tokens=1024, sampler=sampler):
+                    chunk = response.text
+                    full_response += chunk
 
-                # Detect transition from thinking to final response
-                if "\n\nThe" in chunk and not final_response_started:
-                    final_response_started = True
-                    if buffer:
-                        await websocket.send_json({"thinking": buffer, "response": "", "done": False})
+                    if "</think>\n\n" in chunk and not final_response_started:
+                        final_response_started = True
+                        if buffer:
+                            await websocket.send_json({"thinking": buffer, "response": "", "done": False})
+                            buffer = ""
+                        # Remove the marker from the response
+                        chunk = chunk.replace("</think>\n\n", "")
+
+                    buffer += chunk
+                    if len(buffer) > 20:
+                        if final_response_started:
+                            await websocket.send_json({"thinking": "", "response": buffer, "done": False})
+                        else:
+                            await websocket.send_json({"thinking": buffer, "response": "", "done": False})
                         buffer = ""
 
-                # Buffer output for smoother streaming
-                buffer += chunk
-                if len(buffer) > 20:  # Send in reasonable chunks
+                if buffer:
                     if final_response_started:
                         await websocket.send_json({"thinking": "", "response": buffer, "done": False})
                     else:
                         await websocket.send_json({"thinking": buffer, "response": "", "done": False})
-                    buffer = ""
 
-            # Send any remaining buffered content
-            if buffer:
-                if final_response_started:
-                    await websocket.send_json({"thinking": "", "response": buffer, "done": False})
-                else:
-                    await websocket.send_json({"thinking": buffer, "response": "", "done": False})
+                final_response = full_response.split("</think>\n\n")[-1].strip()
+                await websocket.send_json(
+                    {"thinking": "", "response": "", "done": True, "full_response": final_response}
+                )
 
-            # Extract and send final response
-            final_response = full_response.split("\n\nThe")[-1].strip()
-            await websocket.send_json(
-                {"thinking": "", "response": "", "done": True, "full_response": "The " + final_response}
-            )
+            else:
+                # OpenAI API path
+                if not settings.openai_api_key:
+                    await websocket.send_json({"error": "OpenAI API key not configured"})
+                    continue
+
+                client = OpenAI(api_key=settings.openai_api_key)
+
+                messages = [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful AI assistant that answers questions about video content.",
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+
+                stream = client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+
+                full_response = ""
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_response += content
+                        await websocket.send_json({"thinking": "", "response": content, "done": False})
+
+                await websocket.send_json(
+                    {"thinking": "", "response": "", "done": True, "full_response": full_response}
+                )
 
     except WebSocketDisconnect:
         print("Client disconnected")
